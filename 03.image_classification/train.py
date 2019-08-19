@@ -14,6 +14,7 @@
 
 from __future__ import print_function
 
+import logging
 import os
 import argparse
 import paddle
@@ -22,7 +23,11 @@ import numpy
 import sys
 from vgg import vgg_bn_drop
 from resnet import resnet_cifar10
+import my_optimizer
 
+logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("fluid")
+logger.setLevel(logging.INFO)
 
 def parse_args():
     parser = argparse.ArgumentParser("image_classification")
@@ -34,16 +39,25 @@ def parse_args():
         '--use_gpu', type=bool, default=0, help='whether to use gpu')
     parser.add_argument(
         '--num_epochs', type=int, default=1, help='number of epoch')
+    parser.add_argument(
+        '--learning_rate', type=float, default=0.1, help='learning rate')
+    parser.add_argument(
+        '--weight_decay', type=float, default=0.001, help='weight decay')
+    parser.add_argument(
+        '--optimizer_name', type=str, default='SGD', help='optimizer: SGD or Lookahead')
+    parser.add_argument(
+        '--alpha', type=float, default=0.5, help='alpha in Lookahead Optimizer')
+    parser.add_argument(
+        '--k', type=int, default=5, help='k in Lookahead Optimizer')
     args = parser.parse_args()
     return args
-
 
 def inference_network():
     # The image is 32 * 32 with RGB representation.
     data_shape = [3, 32, 32]
     images = fluid.layers.data(name='pixel', shape=data_shape, dtype='float32')
 
-    predict = resnet_cifar10(images, 32)
+    predict = resnet_cifar10(images, depth=20)
     # predict = vgg_bn_drop(images) # un-comment to use vgg net
     return predict
 
@@ -56,25 +70,51 @@ def train_network(predict):
     return [avg_cost, accuracy]
 
 
-def optimizer_program():
-    return fluid.optimizer.Adam(learning_rate=0.001)
+def optimizer_program(name, learning_rate, weight_decay, alpha=0.5, k=10):
+    logger.info('optimizer name: ' + name)
+    logger.info('weight_decay: ' + str(weight_decay))
+    logger.info('learning_rate: ' + str(learning_rate))
+   
+    boundaries = [23438, 46875]
+    values = [learning_rate, learning_rate / 5, learning_rate / 25]
+    logger.info('boundaries: ' + str(boundaries))
+    logger.info('boundaries_value: ' + str(values))
 
+    learning_rate=fluid.layers.piecewise_decay(boundaries, values)
+    regularization=fluid.regularizer.L2DecayRegularizer(regularization_coeff=weight_decay)
+
+    if name == 'SGD':
+        opti = fluid.optimizer.Momentum(
+		learning_rate=learning_rate, momentum=0.9, regularization=regularization)
+    elif name == 'Lookahead':
+        logger.info('alpha: ' + str(alpha))
+        logger.info('k: ' + str(k))
+        sgd = fluid.optimizer.Momentum(
+		learning_rate=learning_rate, momentum=0.9, regularization=regularization)
+        opti = my_optimizer.LookaheadOptimizer(sgd, alpha=alpha, k=k, ignore_embed=False)
+    else:
+	print("No such optimizer: ", name)
+    return opti
 
 def train(use_cuda, params_dirname):
     place = fluid.CUDAPlace(0) if use_cuda else fluid.CPUPlace()
     BATCH_SIZE = 128
 
+    logger.info("batch size: " + str(BATCH_SIZE))
+
     if args.enable_ce:
+        print("Enable CE")
         train_reader = paddle.batch(
             paddle.dataset.cifar.train10(), batch_size=BATCH_SIZE)
         test_reader = paddle.batch(
             paddle.dataset.cifar.test10(), batch_size=BATCH_SIZE)
     else:
+        print("Closed CE")
         test_reader = paddle.batch(
             paddle.dataset.cifar.test10(), batch_size=BATCH_SIZE)
         train_reader = paddle.batch(
             paddle.reader.shuffle(
-                paddle.dataset.cifar.train10(), buf_size=128 * 100),
+                paddle.dataset.cifar.train10(), buf_size=128 * 500),
             batch_size=BATCH_SIZE)
 
     feed_order = ['pixel', 'label']
@@ -91,7 +131,7 @@ def train(use_cuda, params_dirname):
 
     # Test program
     test_program = main_program.clone(for_test=True)
-    optimizer = optimizer_program()
+    optimizer = optimizer_program(args.optimizer_name, learning_rate=args.learning_rate, alpha=args.alpha, k=args.k, weight_decay=args.weight_decay)
     optimizer.minimize(avg_cost)
 
     exe = fluid.Executor(place)
@@ -116,6 +156,7 @@ def train(use_cuda, params_dirname):
                 x[0] + x[1][0] for x in zip(accumulated, avg_cost_np)
             ]
             count += 1
+
         return [x / count for x in accumulated]
 
     # main train loop.
@@ -129,21 +170,21 @@ def train(use_cuda, params_dirname):
         step = 0
         for pass_id in range(EPOCH_NUM):
             for step_id, data_train in enumerate(train_reader()):
-                avg_loss_value = exe.run(
+		lr_var = main_program.global_block().var("learning_rate")
+                avg_loss, avg_acc, learning_rate = exe.run(
                     main_program,
                     feed=feeder.feed(data_train),
-                    fetch_list=[avg_cost, acc])
+                    fetch_list=[avg_cost, acc, lr_var])
                 if step_id % 100 == 0:
-                    print("\nPass %d, Batch %d, Cost %f, Acc %f" % (
-                        step_id, pass_id, avg_loss_value[0], avg_loss_value[1]))
+                    print("\nPass %d, Batch %d, Cost %f, Acc %f, learning rate %f" % (
+                        step_id, pass_id, avg_loss, avg_acc, learning_rate))
                 else:
                     sys.stdout.write('.')
                     sys.stdout.flush()
                 step += 1
-
             avg_cost_test, accuracy_test = train_test(
-                test_program, reader=test_reader)
-            print('\nTest with Pass {0}, Loss {1:2.2}, Acc {2:2.2}'.format(
+                test_program, reader=train_reader)
+            print('\nTest with Pass %d, Loss %f, Acc %f' % (
                 pass_id, avg_cost_test, accuracy_test))
 
             if params_dirname is not None:
