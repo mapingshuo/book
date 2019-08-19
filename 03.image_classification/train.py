@@ -24,6 +24,7 @@ import sys
 from vgg import vgg_bn_drop
 from resnet import resnet_cifar10
 import my_optimizer
+import cifar_preprocess
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("fluid")
@@ -105,16 +106,20 @@ def train(use_cuda, params_dirname):
     if args.enable_ce:
         print("Enable CE")
         train_reader = paddle.batch(
-            paddle.dataset.cifar.train10(), batch_size=BATCH_SIZE)
+            cifar_preprocess.preprocess(paddle.dataset.cifar.train10()), 
+            batch_size=BATCH_SIZE)
         test_reader = paddle.batch(
-            paddle.dataset.cifar.test10(), batch_size=BATCH_SIZE)
+            cifar_preprocess.preprocess(paddle.dataset.cifar.test10()), 
+	    batch_size=BATCH_SIZE)
     else:
         print("Closed CE")
         test_reader = paddle.batch(
-            paddle.dataset.cifar.test10(), batch_size=BATCH_SIZE)
+            cifar_preprocess.preprocess(paddle.dataset.cifar.test10()), 
+	    batch_size=BATCH_SIZE)
         train_reader = paddle.batch(
             paddle.reader.shuffle(
-                paddle.dataset.cifar.train10(), buf_size=128 * 500),
+                cifar_preprocess.preprocess(paddle.dataset.cifar.train10()), 
+		buf_size=128 * 500),
             batch_size=BATCH_SIZE)
 
     feed_order = ['pixel', 'label']
