@@ -8,8 +8,11 @@ W = 32
 H = 32
 #_mean = None
 #_std = None
-_mean = np.asarray([[[0.49139969]], [[0.48215842]], [[0.44653093]]])
-_std = np.asarray([[[0.24703224]], [[0.24348513]], [[0.26158784]]])
+#_mean = np.asarray([[[0.49139969]], [[0.48215842]], [[0.44653093]]])
+#_std = np.asarray([[[0.24703224]], [[0.24348513]], [[0.26158784]]])
+_mean = np.asarray([[[0.485]], [[0.456]], [[0.406]]])
+_std = np.asarray([[[0.229]], [[0.224]], [[0.225]]])
+
 PAD_LEN=4
 
 def cal_mean_and_std(reader):
@@ -79,6 +82,7 @@ def mirror(reader):
     return iter
 
 def preprocess(reader):
+    print("Cifar-10 preprocess: norm, pad, crop, mirror")
     return mirror(crop(pad_zero(normalize(reader))))
 
 if __name__=="__main__": 

@@ -25,6 +25,7 @@ from vgg import vgg_bn_drop
 from resnet import resnet_cifar10
 import my_optimizer
 import cifar_preprocess
+import random
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("fluid")
@@ -50,6 +51,9 @@ def parse_args():
         '--alpha', type=float, default=0.5, help='alpha in Lookahead Optimizer')
     parser.add_argument(
         '--k', type=int, default=5, help='k in Lookahead Optimizer')
+    parser.add_argument(
+        '--random_seed', type=int, default=70, help='random seed for shuffle and network initialize')
+
     args = parser.parse_args()
     return args
 
@@ -75,9 +79,12 @@ def optimizer_program(name, learning_rate, weight_decay, alpha=0.5, k=10):
     logger.info('optimizer name: ' + name)
     logger.info('weight_decay: ' + str(weight_decay))
     logger.info('learning_rate: ' + str(learning_rate))
-   
-    boundaries = [23438, 46875]
-    values = [learning_rate, learning_rate / 5, learning_rate / 25]
+  
+    boundaries = [39062, 58594]
+    values = [learning_rate, learning_rate / 10, learning_rate / 100]     
+    #boundaries = [23438, 46875]
+    #values = [learning_rate, learning_rate / 5, learning_rate / 25]
+    
     logger.info('boundaries: ' + str(boundaries))
     logger.info('boundaries_value: ' + str(values))
 
@@ -98,10 +105,12 @@ def optimizer_program(name, learning_rate, weight_decay, alpha=0.5, k=10):
     return opti
 
 def train(use_cuda, params_dirname):
+    print("CUDA:", use_cuda)
     place = fluid.CUDAPlace(0) if use_cuda else fluid.CPUPlace()
     BATCH_SIZE = 128
-
+    logger.info("random_seed: " + str(args.random_seed))
     logger.info("batch size: " + str(BATCH_SIZE))
+    random.seed(args.random_seed)
 
     if args.enable_ce:
         print("Enable CE")
@@ -113,9 +122,9 @@ def train(use_cuda, params_dirname):
 	    batch_size=BATCH_SIZE)
     else:
         print("Closed CE")
-        test_reader = paddle.batch(
-            cifar_preprocess.preprocess(paddle.dataset.cifar.test10()), 
-	    batch_size=BATCH_SIZE)
+        #test_reader = paddle.batch(
+        #    cifar_preprocess.preprocess(paddle.dataset.cifar.test10()), 
+	#    batch_size=BATCH_SIZE)
         train_reader = paddle.batch(
             paddle.reader.shuffle(
                 cifar_preprocess.preprocess(paddle.dataset.cifar.train10()), 
@@ -131,6 +140,8 @@ def train(use_cuda, params_dirname):
         main_program.random_seed = 90
         start_program.random_seed = 90
 
+    main_program.random_seed = args.random_seed
+    start_program.random_seed = args.random_seed
     predict = inference_network()
     avg_cost, acc = train_network(predict)
 
@@ -171,6 +182,9 @@ def train(use_cuda, params_dirname):
         ]
         feeder = fluid.DataFeeder(feed_list=feed_var_list_loop, place=place)
         exe.run(start_program)
+    
+        with open("main_program", "w") as f:
+            f.write(str(main_program))
 
         step = 0
         for pass_id in range(EPOCH_NUM):
