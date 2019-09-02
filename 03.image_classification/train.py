@@ -23,7 +23,6 @@ import numpy
 import sys
 from vgg import vgg_bn_drop
 from resnet import resnet_cifar10
-import my_optimizer
 import cifar_preprocess
 import random
 
@@ -99,7 +98,7 @@ def optimizer_program(name, learning_rate, weight_decay, alpha=0.5, k=10):
         logger.info('k: ' + str(k))
         sgd = fluid.optimizer.Momentum(
 		learning_rate=learning_rate, momentum=0.9, regularization=regularization)
-        opti = my_optimizer.LookaheadOptimizer(sgd, alpha=alpha, k=k, ignore_embed=False)
+        opti = fluid.optimizer.LookaheadOptimizer(sgd, alpha=alpha, k=k)
     else:
 	print("No such optimizer: ", name)
     return opti
@@ -117,9 +116,9 @@ def train(use_cuda, params_dirname):
         train_reader = paddle.batch(
             cifar_preprocess.preprocess(paddle.dataset.cifar.train10()), 
             batch_size=BATCH_SIZE)
-        test_reader = paddle.batch(
-            cifar_preprocess.preprocess(paddle.dataset.cifar.test10()), 
-	    batch_size=BATCH_SIZE)
+        #test_reader = paddle.batch(
+        #    cifar_preprocess.preprocess(paddle.dataset.cifar.test10()), 
+	#    batch_size=BATCH_SIZE)
     else:
         print("Closed CE")
         #test_reader = paddle.batch(
