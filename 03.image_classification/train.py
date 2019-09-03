@@ -289,7 +289,7 @@ def main(use_cuda):
 
     train(use_cuda=use_cuda, params_dirname=save_path)
 
-    infer(use_cuda=use_cuda, params_dirname=save_path)
+    # infer(use_cuda=use_cuda, params_dirname=save_path)
 
 
 if __name__ == '__main__':
