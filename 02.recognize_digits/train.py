@@ -35,6 +35,23 @@ def parse_args():
         help="Whether to use GPU or not.")
     parser.add_argument(
         '--num_epochs', type=int, default=5, help="number of epochs.")
+    parser.add_argument(
+        '--use_bn',
+        type=bool,
+        default=False,
+        help="Whether to use BN in conv net.")
+    parser.add_argument(
+        '--use_gradient_merge',
+        type=bool,
+        default=False,
+        help="Whether to use gradient merge.")
+    parser.add_argument(
+        '--batch_size', type=int, default=64, help="batch size")
+    parser.add_argument(
+        '--max_step', type=int, default=10, help="max training step")
+    parser.add_argument(
+        '--base_optimizer', type=str, default='sgd', help="the basic optimizers")
+
     args = parser.parse_args()
     return args
 
@@ -65,7 +82,9 @@ def convolutional_neural_network(img, label):
         pool_size=2,
         pool_stride=2,
         act="relu")
-    conv_pool_1 = fluid.layers.batch_norm(conv_pool_1)
+    if args.use_bn:
+        print("use bn")
+        conv_pool_1 = fluid.layers.batch_norm(conv_pool_1)
     conv_pool_2 = fluid.nets.simple_img_conv_pool(
         input=conv_pool_1,
         filter_size=5,
@@ -101,7 +120,7 @@ def train(nn_type,
         test_reader = paddle.batch(
             paddle.dataset.mnist.test(), batch_size=BATCH_SIZE)
 
-    img = fluid.data(name='img', shape=[None, 1, 28, 28], dtype='float32')
+    img = fluid.data(name='img', shape=[None, 1, 28, 28], dtype='float64')
     label = fluid.data(name='label', shape=[None, 1], dtype='int64')
 
     if nn_type == 'softmax_regression':
@@ -114,7 +133,16 @@ def train(nn_type,
     prediction, avg_loss, acc = net_conf(img, label)
 
     test_program = main_program.clone(for_test=True)
-    optimizer = fluid.optimizer.Adam(learning_rate=0.001)
+    if args.base_optimizer == "sgd":
+        optimizer = fluid.optimizer.SGD(learning_rate=0.1)
+    elif args.base_optimizer == "adam":
+        optimizer = fluid.optimizer.Adam(learning_rate=0.01)
+    else:
+        print("not valid optimizer: ", args.base_optimizer)
+        exit()
+    if args.use_gradient_merge:
+        print("use gradient_merge")
+        optimizer = fluid.optimizer.GradientMergeOptimizer(optimizer, k_steps=4, avg=True)
     optimizer.minimize(avg_loss)
 
     def train_test(train_test_program, train_test_feed, train_test_reader):
@@ -138,20 +166,29 @@ def train(nn_type,
 
     feeder = fluid.DataFeeder(feed_list=[img, label], place=place)
     exe.run(startup_program)
+    with open("main_program.txt", 'w') as f:
+        f.write(str(main_program))
     epochs = [epoch_id for epoch_id in range(PASS_NUM)]
 
     lists = []
     step = 0
+    scope = fluid.global_scope()
     for epoch_id in epochs:
         for step_id, data in enumerate(train_reader()):
-            metrics = exe.run(
+            metrics_loss, metrics_acc, grad= exe.run(
                 main_program,
                 feed=feeder.feed(data),
-                fetch_list=[avg_loss, acc])
-            if step % 100 == 0:
-                print("Pass %d, Epoch %d, Cost %f" % (step, epoch_id,
-                                                      metrics[0]))
+                fetch_list=[avg_loss, acc, 
+                  main_program.global_block().var("conv2d_1.b_0@GRAD")])
+            print("Pass %d, Epoch %d, Cost %f" % (step, epoch_id,
+                                                      metrics_loss))
+            print("conv2d_1.b_0@GRAD: ", grad)
+            print("step=%d, conv2d_1.b_0: %s" % (step, scope.var("conv2d_1.b_0").get_tensor().__array__()))
+            print("step=%d, fc_1.b_0: %s" % (step, scope.var("fc_1.b_0").get_tensor().__array__()))
+
             step += 1
+            if step == args.max_step:
+                exit()
         # test for epoch
         avg_loss_val, acc_val = train_test(
             train_test_program=test_program,
@@ -169,7 +206,7 @@ def train(nn_type,
                 params_filename=params_filename)
 
     if args.enable_ce:
-        print("kpis\ttrain_cost\t%f" % metrics[0])
+        print("kpis\ttrain_cost\t%f" % metrics_loss)
         print("kpis\ttest_cost\t%s" % avg_loss_val)
         print("kpis\ttest_acc\t%s" % acc_val)
 
@@ -240,7 +277,7 @@ def main(use_cuda, nn_type):
 
 if __name__ == '__main__':
     args = parse_args()
-    BATCH_SIZE = 64
+    BATCH_SIZE = args.batch_size
     PASS_NUM = args.num_epochs
     use_cuda = args.use_gpu
     # predict = 'softmax_regression' # uncomment for Softmax
