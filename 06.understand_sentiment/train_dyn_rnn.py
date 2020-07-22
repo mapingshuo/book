@@ -23,7 +23,6 @@ import argparse
 
 CLASS_DIM = 2
 EMB_DIM = 128
-BATCH_SIZE = 128
 LSTM_SIZE = 128
 
 
@@ -37,24 +36,42 @@ def parse_args():
         '--use_gpu', type=int, default=0, help="Whether to use GPU or not.")
     parser.add_argument(
         '--num_epochs', type=int, default=1, help="number of epochs.")
+    parser.add_argument(
+        '--max_step', type=int, default=10, help="max training step")
+    parser.add_argument(
+        '--base_optimizer', type=str, default='sgd', help="the basic optimizers")
+    parser.add_argument(
+        '--batch_size', type=int, default=64, help="batch size")
+    parser.add_argument(
+        '--use_gradient_merge',
+        type=bool,
+        default=False,
+        help="Whether to use gradient merge.")
+    parser.add_argument(
+        '--embedding_type', type=str, default='dense', help="dense or sparse")
+
     args = parser.parse_args()
     return args
 
 
 def dynamic_rnn_lstm(data, input_dim, class_dim, emb_dim, lstm_size):
-    emb = fluid.embedding(input=data, size=[input_dim, emb_dim], is_sparse=True)
+    if args.embedding_type == "dense":
+        emb = fluid.embedding(input=data, size=[input_dim, emb_dim], is_sparse=False, dtype="float64")
+    elif args.embedding_type == "sparse":
+        emb = fluid.embedding(input=data, size=[input_dim, emb_dim], is_sparse=True, dtype="float64")
+    else:
+        print("not valid embedding type: ", args.embedding_type)
+        exit()
     sentence = fluid.layers.fc(input=emb, size=lstm_size * 4, act='tanh')
 
-    lstm, _ = fluid.layers.dynamic_lstm(sentence, size=lstm_size * 4)
-
+    lstm, _ = fluid.layers.dynamic_lstm(sentence, size=lstm_size * 4, dtype="float64")
     last = fluid.layers.sequence_last_step(lstm)
     prediction = fluid.layers.fc(input=last, size=class_dim, act="softmax")
     return prediction
 
 
-def inference_program(word_dict):
+def inference_program(dict_dim):
     data = fluid.data(name="words", shape=[None], dtype="int64", lod_level=1)
-    dict_dim = len(word_dict)
     pred = dynamic_rnn_lstm(data, dict_dim, CLASS_DIM, EMB_DIM, LSTM_SIZE)
     return pred
 
@@ -68,30 +85,24 @@ def train_program(prediction):
 
 
 def optimizer_func():
-    return fluid.optimizer.Adagrad(learning_rate=0.002)
+    if args.base_optimizer == "sgd":
+        optimizer = fluid.optimizer.SGD(learning_rate=0.1)
+    elif args.base_optimizer == "adam":
+        optimizer = fluid.optimizer.Adam(learning_rate=0.01)
+    elif args.base_optimizer == "adagrad":
+        optimizer = fluid.optimizer.Adagrad(learning_rate=0.002)
+    else:
+        print("not valid optimizer: ", args.base_optimizer)
+        exit()
+    if args.use_gradient_merge:
+        print("use gradient_merge")
+        optimizer = fluid.optimizer.GradientMergeOptimizer(optimizer, k_steps=4, avg=True)
+    return optimizer
 
 
 def train(use_cuda, params_dirname):
     place = fluid.CUDAPlace(0) if use_cuda else fluid.CPUPlace()
-    print("Loading IMDB word dict....")
-    word_dict = paddle.dataset.imdb.word_dict()
-
-    print("Reading training data....")
-    if args.enable_ce:
-        train_reader = paddle.batch(
-            paddle.dataset.imdb.train(word_dict), batch_size=BATCH_SIZE)
-    else:
-        train_reader = paddle.batch(
-            paddle.reader.shuffle(
-                paddle.dataset.imdb.train(word_dict), buf_size=25000),
-            batch_size=BATCH_SIZE)
-
-    print("Reading testing data....")
-    test_reader = paddle.batch(
-        paddle.dataset.imdb.test(word_dict), batch_size=BATCH_SIZE)
-
-    feed_order = ['words', 'label']
-    pass_num = args.num_epochs
+    print("use_cuda: ", use_cuda)
 
     main_program = fluid.default_main_program()
     star_program = fluid.default_startup_program()
@@ -100,7 +111,7 @@ def train(use_cuda, params_dirname):
         main_program.random_seed = 90
         star_program.random_seed = 90
 
-    prediction = inference_program(word_dict)
+    prediction = inference_program(5147)
     train_func_outputs = train_program(prediction)
     avg_cost = train_func_outputs[0]
 
@@ -110,6 +121,8 @@ def train(use_cuda, params_dirname):
     sgd_optimizer.minimize(avg_cost)
     exe = fluid.Executor(place)
 
+    feed_order = ['words', 'label']
+    pass_num = args.num_epochs
     def train_test(program, reader):
         count = 0
         feed_var_list = [
@@ -137,23 +150,35 @@ def train(use_cuda, params_dirname):
         feeder = fluid.DataFeeder(feed_list=feed_var_list_loop, place=place)
         exe.run(fluid.default_startup_program())
 
+        with open("main_program.txt", 'w') as f:
+            f.write(str(main_program))
+
+        print("Loading IMDB word dict....")
+        word_dict = paddle.dataset.imdb.word_dict()
+        print("word dict len: ", len(word_dict))
+
+        print("Reading training data....")
+        if args.enable_ce:
+            train_reader = paddle.batch(
+                paddle.dataset.imdb.train(word_dict), batch_size=args.batch_size)
+        else:
+            train_reader = paddle.batch(
+                paddle.reader.shuffle(
+                    paddle.dataset.imdb.train(word_dict), buf_size=25000),
+                batch_size=args.batch_size)
+
+        scope = fluid.global_scope()
         for epoch_id in range(pass_num):
             for step_id, data in enumerate(train_reader()):
                 metrics = exe.run(
                     main_program,
                     feed=feeder.feed(data),
                     fetch_list=[var.name for var in train_func_outputs])
-                if (step_id + 1) % 10 == 0:
-
-                    avg_cost_test, acc_test = train_test(test_program,
-                                                         test_reader)
-                    print('Step {0}, Test Loss {1:0.2}, Acc {2:0.2}'.format(
-                        step_id, avg_cost_test, acc_test))
-
-                    print("Step {0}, Epoch {1} Metrics {2}".format(
-                        step_id, epoch_id, list(map(np.array, metrics))))
+                print("step=%d, lstm_0.b_0: %s" % (step_id, scope.var("lstm_0.b_0").get_tensor().__array__()))
                 if math.isnan(float(metrics[0])):
                     sys.exit("got NaN loss, training failed.")
+                if step_id == args.max_step:
+                    exit()
             if params_dirname is not None:
                 fluid.io.save_inference_model(params_dirname, ["words"],
                                               prediction, exe)
