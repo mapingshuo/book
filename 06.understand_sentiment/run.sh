@@ -5,7 +5,7 @@ python train_dyn_rnn.py \
     --use_gradient_merge="true" \
     --batch_size=16 \
     --max_step=40 \
-    --base_optimizer="adagrad" \
+    --base_optimizer="sgd" \
     --embedding_type="dense"
 
 

@@ -94,9 +94,9 @@ def optimizer_func():
     else:
         print("not valid optimizer: ", args.base_optimizer)
         exit()
-    if args.use_gradient_merge:
+    if args.use_gradient_merge and args.use_gradient_merge == "true":
         print("use gradient_merge")
-        optimizer = fluid.optimizer.GradientMergeOptimizer(optimizer, k_steps=1, avg=True)
+        optimizer = fluid.optimizer.GradientMergeOptimizer(optimizer, k_steps=4, avg=True)
     return optimizer
 
 
@@ -167,6 +167,8 @@ def train(use_cuda, params_dirname):
                     paddle.dataset.imdb.train(word_dict), buf_size=25000),
                 batch_size=args.batch_size)
 
+        import time 
+        start=time.time()
         scope = fluid.global_scope()
         for epoch_id in range(pass_num):
             for step_id, data in enumerate(train_reader()):
@@ -178,8 +180,11 @@ def train(use_cuda, params_dirname):
                     sys.exit("got NaN loss, training failed.")
                 if step_id == args.max_step:
                     exit()
-                print("kpis\trnn_train_cost\t%f" % metrics[0])
-                #print("kpis\trnn_train_acc\t%f" % metrics[1])
+                end = time.time()
+                print("step: %d, \trnn_train_cost\t%f, %f steps/s" % (
+			step_id, 
+			metrics[0], 
+			(step_id+1) / (end-start)))
             if params_dirname is not None:
                 fluid.io.save_inference_model(params_dirname, ["words"],
                                               prediction, exe)
