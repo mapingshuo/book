@@ -44,8 +44,8 @@ def parse_args():
         '--batch_size', type=int, default=64, help="batch size")
     parser.add_argument(
         '--use_gradient_merge',
-        type=bool,
-        default=False,
+        type=str,
+        default="false",
         help="Whether to use gradient merge.")
     parser.add_argument(
         '--embedding_type', type=str, default='dense', help="dense or sparse")
@@ -96,7 +96,7 @@ def optimizer_func():
         exit()
     if args.use_gradient_merge:
         print("use gradient_merge")
-        optimizer = fluid.optimizer.GradientMergeOptimizer(optimizer, k_steps=4, avg=True)
+        optimizer = fluid.optimizer.GradientMergeOptimizer(optimizer, k_steps=1, avg=True)
     return optimizer
 
 
@@ -174,11 +174,12 @@ def train(use_cuda, params_dirname):
                     main_program,
                     feed=feeder.feed(data),
                     fetch_list=[var.name for var in train_func_outputs])
-                print("step=%d, lstm_0.b_0: %s" % (step_id, scope.var("lstm_0.b_0").get_tensor().__array__()))
                 if math.isnan(float(metrics[0])):
                     sys.exit("got NaN loss, training failed.")
                 if step_id == args.max_step:
                     exit()
+                print("kpis\trnn_train_cost\t%f" % metrics[0])
+                #print("kpis\trnn_train_acc\t%f" % metrics[1])
             if params_dirname is not None:
                 fluid.io.save_inference_model(params_dirname, ["words"],
                                               prediction, exe)
