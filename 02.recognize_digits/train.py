@@ -42,8 +42,8 @@ def parse_args():
         help="Whether to use BN in conv net.")
     parser.add_argument(
         '--use_gradient_merge',
-        type=bool,
-        default=False,
+        type=str,
+        default="false",
         help="Whether to use gradient merge.")
     parser.add_argument(
         '--batch_size', type=int, default=64, help="batch size")
@@ -140,7 +140,7 @@ def train(nn_type,
     else:
         print("not valid optimizer: ", args.base_optimizer)
         exit()
-    if args.use_gradient_merge:
+    if args.use_gradient_merge and args.use_gradient_merge == "true":
         print("use gradient_merge")
         optimizer = fluid.optimizer.GradientMergeOptimizer(optimizer, k_steps=4, avg=True)
     optimizer.minimize(avg_loss)
@@ -173,6 +173,8 @@ def train(nn_type,
     lists = []
     step = 0
     scope = fluid.global_scope()
+    import time
+    start=time.time()
     for epoch_id in epochs:
         for step_id, data in enumerate(train_reader()):
             metrics_loss, metrics_acc, grad= exe.run(
@@ -180,11 +182,9 @@ def train(nn_type,
                 feed=feeder.feed(data),
                 fetch_list=[avg_loss, acc, 
                   main_program.global_block().var("conv2d_1.b_0@GRAD")])
-            print("Pass %d, Epoch %d, Cost %f" % (step, epoch_id,
-                                                      metrics_loss))
-            print("conv2d_1.b_0@GRAD: ", grad)
-            print("step=%d, conv2d_1.b_0: %s" % (step, scope.var("conv2d_1.b_0").get_tensor().__array__()))
-            print("step=%d, fc_1.b_0: %s" % (step, scope.var("fc_1.b_0").get_tensor().__array__()))
+            end = time.time()
+            print("Pass %d, Epoch %d, Cost %f, %f steps/s" % (step, epoch_id,
+                                                      metrics_loss, (end-start)/(step_id+1)))
 
             step += 1
             if step == args.max_step:
