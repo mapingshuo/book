@@ -174,17 +174,20 @@ def train(nn_type,
     step = 0
     scope = fluid.global_scope()
     import time
-    start=time.time()
+    skip=1
     for epoch_id in epochs:
         for step_id, data in enumerate(train_reader()):
+            if step_id == skip:
+              start=time.time()
             metrics_loss, metrics_acc, grad= exe.run(
                 main_program,
                 feed=feeder.feed(data),
                 fetch_list=[avg_loss, acc, 
                   main_program.global_block().var("conv2d_1.b_0@GRAD")])
-            end = time.time()
-            print("Pass %d, Epoch %d, Cost %f, %f steps/s" % (step, epoch_id,
-                                                      metrics_loss, (end-start)/(step_id+1)))
+            if step_id >= skip:
+              end = time.time()
+              print("Pass %d, Epoch %d, Cost %f, %f steps/s" % (step, epoch_id,
+                                                      metrics_loss, (step_id + 1 - skip)/(end-start)))
 
             step += 1
             if step == args.max_step:
